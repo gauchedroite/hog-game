@@ -6,9 +6,9 @@ A small two-player dice game built with plain HTML, CSS, and TypeScript. First p
 
 1. Install Node.js.
 2. Run `npm install`.
-3. Run `npm run build`.
-4. Start the static server with `npx http-server . -p 8000` and open `http://localhost:8000`.
+3. Run `npm run dev`.
+4. Open `http://localhost:8123`.
 
-While editing TypeScript in `src/`, run `npm run dev` in a separate terminal to rebuild on changes. It only compiles; keep the static server running separately.
+The dev command rebuilds TypeScript when files change and starts the static server without caching, so press Ctrl+R after a build finishes.
 
 Run the game logic tests with `npm test`.

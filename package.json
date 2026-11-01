@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch",
+    "dev": "concurrently --kill-others \"tsc --watch\" \"npx --yes http-server . -p 8123 -c-1\"",
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "devDependencies": {
+    "concurrently": "^10.0.6",
     "typescript": "^7.0.2"
   }
 }
