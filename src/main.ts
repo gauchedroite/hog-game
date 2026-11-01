@@ -14,7 +14,7 @@ import * as HomeMain from "./home/main.js"
 
 export const startup = async () => {
 
-    await App.initialize(Layout.render, Layout.postRender, "Roi de Québec");
+    await App.initialize(Layout.render, Layout.postRender, "Jeu d'objets cachés");
 
 
     HomeMain.startup();

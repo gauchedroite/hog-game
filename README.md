@@ -12,3 +12,5 @@ A small two-player dice game built with plain HTML, CSS, and TypeScript. First p
 The dev command rebuilds TypeScript when files change and starts the static server without caching, so press Ctrl+R after a build finishes.
 
 Run the game logic tests with `npm test`.
+
+See [the core guide](docs/core.md) for the shared files in `src/core` and a small app example.
