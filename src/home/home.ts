@@ -38,5 +38,5 @@ export const postRender = () => {
 
 
 export const play = () => {
-    Router.goto(`#/game`)
+    Router.goto(`#/game/level-01`)
 }

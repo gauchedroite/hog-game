@@ -3,7 +3,9 @@
 import * as App from "../core/app.js"
 import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
-import { clampPan, clampZoom } from "./pan.js"
+import { clampPan, clampZoom, imagePoint } from "./pan.js"
+import { objectComponent, objectNameFromPixel } from "./objects.js"
+import { isLevelId, levelSettings } from "./level.js"
 
 export const NS = "App_game";
 
@@ -21,15 +23,99 @@ const fetchState = () => {
     return Promise.resolve();
 }
 
-let levelLoaded = false;
+let activeLevel: string | null = null;
+let activeLoad: AbortController | null = null;
+let showBw = true;
+let redraw = () => {};
 
-const loadLevel = () => {
+const loadLevel = (levelId: string) => {
     const canvas = document.querySelector<HTMLCanvasElement>(".game-canvas");
     const context = canvas?.getContext("2d");
-    if (!canvas || !context || levelLoaded) return;
-    levelLoaded = true;
+    if (!canvas || !context || activeLevel === levelId) return;
+    activeLoad?.abort();
+    activeLoad = new AbortController();
+    const { signal } = activeLoad;
+    activeLevel = levelId;
 
     const image = new Image();
+    const colorImage = new Image();
+    const objectMask = new Image();
+    const objectCanvas = document.createElement("canvas");
+    const colorCanvas = document.createElement("canvas");
+    const objectRevealCanvas = document.createElement("canvas");
+    let objectMaskContext: CanvasRenderingContext2D | null = null;
+    let objectRevealContext: CanvasRenderingContext2D | null = null;
+    let objectMaskPixels: Uint8ClampedArray | null = null;
+    let colorPixels: Uint8ClampedArray | null = null;
+    let draw = () => {};
+    let objectNames = new Map<string, string>();
+    let objectMaskReady = false;
+    let objectNamesReady = false;
+    let objectLookupFailed = false;
+    let selectedPoint: { x: number; y: number } | null = null;
+    const updateCoordinates = () => {
+        if (signal.aborted || !selectedPoint) return;
+        const coordinates = document.getElementById("image-coordinates");
+        if (!coordinates) return;
+        const pixel = objectMaskContext?.getImageData(selectedPoint.x, selectedPoint.y, 1, 1).data;
+        const name = pixel && objectNameFromPixel(pixel, objectNames);
+        const status = objectLookupFailed ? "unavailable" : !objectMaskReady || !objectNamesReady ? "Loading…" : name ?? "—";
+        const rgba = pixel ? Array.from(pixel).join(", ") : objectLookupFailed ? "unavailable" : "Loading…";
+        coordinates.textContent = `X: ${selectedPoint.x}, Y: ${selectedPoint.y}\nObject: ${status}\nRGBA: ${rgba}`;
+    };
+    const revealSelectedObject = () => {
+        if (signal.aborted || !selectedPoint || !objectRevealContext) return;
+        if (!objectMaskPixels || !colorPixels) return;
+        const width = objectMask.naturalWidth;
+        const component = objectComponent(objectMaskPixels, width, objectMask.naturalHeight, selectedPoint.x, selectedPoint.y);
+        if (!component || width !== colorImage.naturalWidth || objectMask.naturalHeight !== colorImage.naturalHeight) {
+            draw();
+            return;
+        }
+        const cropWidth = component.x2 - component.x1 + 1;
+        const cropHeight = component.y2 - component.y1 + 1;
+        const extracted = objectRevealContext.createImageData(cropWidth, cropHeight);
+        for (const index of component.pixels) {
+            const x = index % width;
+            const y = Math.floor(index / width);
+            const source = index * 4;
+            const target = ((y - component.y1) * cropWidth + x - component.x1) * 4;
+            extracted.data.set(colorPixels.subarray(source, source + 4), target);
+            extracted.data[target + 3] = Math.round(extracted.data[target + 3] * objectMaskPixels[source + 3] / 255);
+        }
+        objectRevealContext.putImageData(extracted, component.x1, component.y1);
+        draw();
+    };
+    objectMask.onload = () => {
+        objectCanvas.width = objectMask.naturalWidth;
+        objectCanvas.height = objectMask.naturalHeight;
+        objectMaskContext = objectCanvas.getContext("2d");
+        objectMaskContext?.drawImage(objectMask, 0, 0);
+        objectMaskPixels = objectMaskContext?.getImageData(0, 0, objectCanvas.width, objectCanvas.height).data ?? null;
+        objectMaskReady = true;
+        updateCoordinates();
+        revealSelectedObject();
+    };
+    objectMask.onerror = () => {
+        objectLookupFailed = true;
+        objectMaskReady = true;
+        updateCoordinates();
+    };
+    objectMask.src = `assets/images/${levelId}-objects.png`;
+    colorImage.onload = () => {
+        colorCanvas.width = colorImage.naturalWidth;
+        colorCanvas.height = colorImage.naturalHeight;
+        const colorContext = colorCanvas.getContext("2d");
+        if (!colorContext) return;
+        colorContext.drawImage(colorImage, 0, 0);
+        colorPixels = colorContext.getImageData(0, 0, colorCanvas.width, colorCanvas.height).data;
+        objectRevealCanvas.width = colorImage.naturalWidth;
+        objectRevealCanvas.height = colorImage.naturalHeight;
+        objectRevealContext = objectRevealCanvas.getContext("2d");
+        revealSelectedObject();
+    };
+    colorImage.src = `assets/images/${levelId}-color.png`;
+
     let viewportWidth = 0;
     let viewportHeight = 0;
     let imageWidth = 0;
@@ -37,10 +123,13 @@ const loadLevel = () => {
     let panX = 0;
     let panY = 0;
     let zoom = 1;
+    let maxZoom = 10;
+    let imageSmoothingEnabled = true;
     let positioned = false;
     let dragging = false;
     let pointerX = 0;
     let pointerY = 0;
+    let clickStart: { id: number; x: number; y: number } | null = null;
     let startPanX = 0;
     let startPanY = 0;
     let pinchStartDistance = 0;
@@ -51,11 +140,11 @@ const loadLevel = () => {
     let pinchStartPanY = 0;
     const pointers = new Map<number, { x: number; y: number }>();
 
-    const draw = () => {
+    draw = () => {
         const bounds = canvas.getBoundingClientRect();
         viewportWidth = bounds.width;
         viewportHeight = bounds.height;
-        if (!viewportWidth || !viewportHeight || !image.naturalWidth) return;
+        if (signal.aborted || !viewportWidth || !viewportHeight || !image.naturalWidth) return;
 
         const pixelRatio = window.devicePixelRatio || 1;
         const pixelWidth = Math.round(viewportWidth * pixelRatio);
@@ -78,11 +167,39 @@ const loadLevel = () => {
 
         context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
         context.clearRect(0, 0, viewportWidth, viewportHeight);
-        context.drawImage(image, panX, panY, imageWidth, imageHeight);
+        context.imageSmoothingEnabled = imageSmoothingEnabled;
+        context.globalCompositeOperation = "source-over";
+        if (objectRevealCanvas.width && objectRevealCanvas.height) context.drawImage(objectRevealCanvas, panX, panY, imageWidth, imageHeight);
+        if (showBw) {
+            context.globalCompositeOperation = "multiply";
+            context.drawImage(image, panX, panY, imageWidth, imageHeight);
+            context.globalCompositeOperation = "source-over";
+        }
     };
+    redraw = draw;
+
+    window.fetch(`assets/data/${levelId}.json`)
+        .then(response => {
+            if (!response.ok) throw new Error(`Failed to load object data: ${response.status}`);
+            return response.json();
+        })
+        .then((level: { objects: { name: string; color: string }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown }) => {
+            objectNames = new Map(level.objects.map(object => [object.color.toUpperCase(), object.name]));
+            ({ imageSmoothingEnabled, maxZoom } = levelSettings(level));
+            zoom = clampZoom(zoom, maxZoom);
+            objectNamesReady = true;
+            updateCoordinates();
+            draw();
+        })
+        .catch(error => {
+            console.error(error);
+            objectLookupFailed = true;
+            objectNamesReady = true;
+            updateCoordinates();
+        });
 
     const zoomAt = (nextZoom: number, x: number, y: number) => {
-        const updatedZoom = clampZoom(nextZoom);
+        const updatedZoom = clampZoom(nextZoom, maxZoom);
         if (updatedZoom === zoom) return;
         const ratio = updatedZoom / zoom;
         panX = x - (x - panX) * ratio;
@@ -95,7 +212,7 @@ const loadLevel = () => {
         event.preventDefault();
         const bounds = canvas.getBoundingClientRect();
         zoomAt(zoom * Math.exp(-event.deltaY * 0.001), event.clientX - bounds.left, event.clientY - bounds.top);
-    }, { passive: false });
+    }, { passive: false, signal });
     canvas.addEventListener("pointerdown", event => {
         if (!positioned || pointers.size >= 2 || (event.pointerType === "mouse" && event.button !== 0)) return;
         pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -104,9 +221,11 @@ const loadLevel = () => {
             dragging = true;
             pointerX = event.clientX;
             pointerY = event.clientY;
+            clickStart = { id: event.pointerId, x: event.clientX, y: event.clientY };
             startPanX = panX;
             startPanY = panY;
         } else if (pointers.size === 2) {
+            clickStart = null;
             dragging = false;
             const [first, second] = [...pointers.values()];
             pinchStartDistance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
@@ -117,17 +236,18 @@ const loadLevel = () => {
             pinchStartPanY = panY;
         }
         canvas.classList.add("is-dragging");
-    });
+    }, { signal });
     canvas.addEventListener("pointermove", event => {
         const pointer = pointers.get(event.pointerId);
         if (!pointer) return;
         pointer.x = event.clientX;
         pointer.y = event.clientY;
+        if (clickStart?.id === event.pointerId && Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y) > 5) clickStart = null;
 
         if (pointers.size >= 2) {
             const [first, second] = [...pointers.values()];
             const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
-            const nextZoom = clampZoom(pinchStartZoom * distance / pinchStartDistance);
+            const nextZoom = clampZoom(pinchStartZoom * distance / pinchStartDistance, maxZoom);
             const ratio = nextZoom / pinchStartZoom;
             const bounds = canvas.getBoundingClientRect();
             const centerX = (first.x + second.x) / 2 - bounds.left;
@@ -141,8 +261,19 @@ const loadLevel = () => {
             panY = clampPan(startPanY + event.clientY - pointerY, viewportHeight, imageHeight);
             draw();
         }
-    });
-    const endPan = (event: PointerEvent) => {
+    }, { signal });
+    const endPan = (event: PointerEvent, isClick: boolean) => {
+        if (isClick && clickStart?.id === event.pointerId) {
+            const bounds = canvas.getBoundingClientRect();
+            const scale = imageWidth / image.naturalWidth;
+            const point = imagePoint(event.clientX - bounds.left, event.clientY - bounds.top, panX, panY, scale, image.naturalWidth, image.naturalHeight);
+            if (point) {
+                selectedPoint = point;
+                updateCoordinates();
+                revealSelectedObject();
+            }
+        }
+        if (clickStart?.id === event.pointerId) clickStart = null;
         pointers.delete(event.pointerId);
         dragging = false;
         if (pointers.size === 1) {
@@ -155,16 +286,18 @@ const loadLevel = () => {
         }
         if (pointers.size === 0) canvas.classList.remove("is-dragging");
     };
-    canvas.addEventListener("pointerup", endPan);
-    canvas.addEventListener("pointercancel", endPan);
-    window.addEventListener("resize", draw);
+    canvas.addEventListener("pointerup", event => endPan(event, true), { signal });
+    canvas.addEventListener("pointercancel", event => endPan(event, false), { signal });
+    window.addEventListener("resize", draw, { signal });
 
     image.onload = draw;
-    image.src = "assets/images/level-01.jpg";
+    image.src = `assets/images/${levelId}-bw.png`;
 }
 
-export const fetch = () => {
-    loadLevel();
+export const fetch = (params?: string[]) => {
+    const levelId = params?.[0];
+    if (!levelId || !isLevelId(levelId)) return;
+    loadLevel(levelId);
     App.prepareRender(NS, "On joue!");
     Router.registerDirtyExit(null);
     fetchState()
@@ -178,7 +311,12 @@ export const render = () => {
     if (!App.inContext(NS)) return "";
 
     return `
-    <div>On joue!</div>
+    <div class="image-hud">
+        <div id="image-coordinates" class="image-coordinates">X: –, Y: –
+Object: –
+RGBA: –</div>
+        <label><input type="checkbox" ${showBw ? "checked" : ""} onchange="${NS}.toggleBw(this.checked)"> Show B&amp;W</label>
+    </div>
 `;
 }
 
@@ -188,6 +326,11 @@ export const postRender = () => {
 
 
 
+export const toggleBw = (show: boolean) => {
+    showBw = show;
+    redraw();
+}
+
 export const play = () => {
-    Router.goto(`#/game`)
+    if (activeLevel) Router.goto(`#/game/${activeLevel}`)
 }
