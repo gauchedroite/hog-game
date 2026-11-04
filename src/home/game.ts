@@ -4,7 +4,7 @@ import * as App from "../core/app.js"
 import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
 import { clampPan, clampZoom, imagePoint } from "./pan.js"
-import { objectComponent, objectNameFromPixel } from "./objects.js"
+import { extractMaskedRegion, fadeProgress, isZoneComplete, objectColorMatches, objectComponent, objectNameFromPixel } from "./objects.js"
 import { isLevelId, levelSettings } from "./level.js"
 
 export const NS = "App_game";
@@ -40,18 +40,39 @@ const loadLevel = (levelId: string) => {
     const image = new Image();
     const colorImage = new Image();
     const objectMask = new Image();
+    const zonesMask = new Image();
     const objectCanvas = document.createElement("canvas");
+    const zonesCanvas = document.createElement("canvas");
     const colorCanvas = document.createElement("canvas");
-    const objectRevealCanvas = document.createElement("canvas");
     let objectMaskContext: CanvasRenderingContext2D | null = null;
-    let objectRevealContext: CanvasRenderingContext2D | null = null;
     let objectMaskPixels: Uint8ClampedArray | null = null;
+    let zonesMaskPixels: Uint8ClampedArray | null = null;
     let colorPixels: Uint8ClampedArray | null = null;
     let draw = () => {};
+    let revealAnimation = 0;
+    const revealedObjects: { id: string; canvas: HTMLCanvasElement; x: number; y: number; opacity: number; startedAt: number }[] = [];
+    const animateRevealedObjects = (now: number) => {
+        revealAnimation = 0;
+        if (signal.aborted) return;
+        let fading = false;
+        for (const object of revealedObjects) {
+            object.opacity = fadeProgress(now, object.startedAt, 150);
+            if (object.opacity < 1) fading = true;
+        }
+        draw();
+        if (fading) revealAnimation = requestAnimationFrame(animateRevealedObjects);
+    };
     let objectNames = new Map<string, string>();
     let objectMaskReady = false;
     let objectNamesReady = false;
     let objectLookupFailed = false;
+    let objectItems: { id: number; zone: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
+    let zoneDefinitions: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
+    const selectedObjectIds = new Set<number>();
+    const completedZones = new Set<string>();
+    const pendingSelectionPoints: { x: number; y: number }[] = [];
+    const pendingRevealPoints: { x: number; y: number }[] = [];
+    const pendingZoneReveals: string[] = [];
     let selectedPoint: { x: number; y: number } | null = null;
     const updateCoordinates = () => {
         if (signal.aborted || !selectedPoint) return;
@@ -63,18 +84,62 @@ const loadLevel = (levelId: string) => {
         const rgba = pixel ? Array.from(pixel).join(", ") : objectLookupFailed ? "unavailable" : "Loading…";
         coordinates.textContent = `X: ${selectedPoint.x}, Y: ${selectedPoint.y}\nObject: ${status}\nRGBA: ${rgba}`;
     };
-    const revealSelectedObject = () => {
-        if (signal.aborted || !selectedPoint || !objectRevealContext) return;
-        if (!objectMaskPixels || !colorPixels) return;
-        const width = objectMask.naturalWidth;
-        const component = objectComponent(objectMaskPixels, width, objectMask.naturalHeight, selectedPoint.x, selectedPoint.y);
-        if (!component || width !== colorImage.naturalWidth || objectMask.naturalHeight !== colorImage.naturalHeight) {
-            draw();
+    const addRevealedImage = (id: string, pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number) => {
+        if (revealedObjects.some(object => object.id === id)) return;
+        const layer = document.createElement("canvas");
+        layer.width = width;
+        layer.height = height;
+        const layerContext = layer.getContext("2d");
+        if (!layerContext) return;
+        const imageData = new ImageData(width, height);
+        imageData.data.set(pixels);
+        layerContext.putImageData(imageData, 0, 0);
+        revealedObjects.push({ id, canvas: layer, x, y, opacity: 0, startedAt: performance.now() });
+        if (!revealAnimation) revealAnimation = requestAnimationFrame(animateRevealedObjects);
+    };
+    const revealZone = (name: string) => {
+        if (signal.aborted) return;
+        if (!objectNamesReady || !zonesMaskPixels || !colorPixels) {
+            pendingZoneReveals.push(name);
             return;
         }
+        const zone = zoneDefinitions.find(zone => zone.name === name);
+        if (!zone || zonesMask.naturalWidth !== colorImage.naturalWidth || zonesMask.naturalHeight !== colorImage.naturalHeight) return;
+        const extracted = extractMaskedRegion(colorPixels, zonesMaskPixels, zonesMask.naturalWidth, zonesMask.naturalHeight, zone.color, zone.bbox);
+        if (extracted) addRevealedImage(`zone:${name}`, extracted.pixels, extracted.width, extracted.height, extracted.x, extracted.y);
+    };
+    const processPendingZoneReveals = () => {
+        if (!objectNamesReady || !zonesMaskPixels || !colorPixels) return;
+        for (const name of pendingZoneReveals) revealZone(name);
+        pendingZoneReveals.length = 0;
+    };
+    const selectObjectAt = (point: { x: number; y: number }) => {
+        const pixel = objectMaskContext?.getImageData(point.x, point.y, 1, 1).data;
+        const item = pixel && objectItems.find(item => point.x >= item.bbox.x1 && point.x <= item.bbox.x2 && point.y >= item.bbox.y1 && point.y <= item.bbox.y2 && objectColorMatches(pixel, item.color));
+        if (!item || !item.zone || selectedObjectIds.has(item.id)) return;
+        selectedObjectIds.add(item.id);
+        if (!completedZones.has(item.zone) && isZoneComplete(objectItems, selectedObjectIds, item.zone)) {
+            completedZones.add(item.zone);
+            revealZone(item.zone);
+        }
+    };
+    const processPendingSelections = () => {
+        if (!objectMaskPixels || !objectNamesReady) return;
+        for (const point of pendingSelectionPoints) selectObjectAt(point);
+        pendingSelectionPoints.length = 0;
+    };
+    const markSelectedObject = (point: { x: number; y: number }) => {
+        if (!objectMaskPixels || !objectNamesReady) pendingSelectionPoints.push(point);
+        else selectObjectAt(point);
+    };
+    const revealObjectAt = (point: { x: number; y: number }) => {
+        if (signal.aborted || !objectMaskPixels || !colorPixels) return;
+        const width = objectMask.naturalWidth;
+        const component = objectComponent(objectMaskPixels, width, objectMask.naturalHeight, point.x, point.y);
+        if (!component || width !== colorImage.naturalWidth || objectMask.naturalHeight !== colorImage.naturalHeight || revealedObjects.some(object => object.id === `object:${component.id}`)) return;
         const cropWidth = component.x2 - component.x1 + 1;
         const cropHeight = component.y2 - component.y1 + 1;
-        const extracted = objectRevealContext.createImageData(cropWidth, cropHeight);
+        const extracted = new ImageData(cropWidth, cropHeight);
         for (const index of component.pixels) {
             const x = index % width;
             const y = Math.floor(index / width);
@@ -83,8 +148,16 @@ const loadLevel = (levelId: string) => {
             extracted.data.set(colorPixels.subarray(source, source + 4), target);
             extracted.data[target + 3] = Math.round(extracted.data[target + 3] * objectMaskPixels[source + 3] / 255);
         }
-        objectRevealContext.putImageData(extracted, component.x1, component.y1);
-        draw();
+        addRevealedImage(`object:${component.id}`, extracted.data, cropWidth, cropHeight, component.x1, component.y1);
+    };
+    const processPendingReveals = () => {
+        if (!objectMaskPixels || !colorPixels) return;
+        for (const point of pendingRevealPoints) revealObjectAt(point);
+        pendingRevealPoints.length = 0;
+    };
+    const revealSelectedObject = (point: { x: number; y: number }) => {
+        if (!objectMaskPixels || !colorPixels) pendingRevealPoints.push(point);
+        else revealObjectAt(point);
     };
     objectMask.onload = () => {
         objectCanvas.width = objectMask.naturalWidth;
@@ -94,7 +167,17 @@ const loadLevel = (levelId: string) => {
         objectMaskPixels = objectMaskContext?.getImageData(0, 0, objectCanvas.width, objectCanvas.height).data ?? null;
         objectMaskReady = true;
         updateCoordinates();
-        revealSelectedObject();
+        processPendingSelections();
+        processPendingReveals();
+    };
+    zonesMask.onload = () => {
+        zonesCanvas.width = zonesMask.naturalWidth;
+        zonesCanvas.height = zonesMask.naturalHeight;
+        const zonesContext = zonesCanvas.getContext("2d");
+        if (!zonesContext) return;
+        zonesContext.drawImage(zonesMask, 0, 0);
+        zonesMaskPixels = zonesContext.getImageData(0, 0, zonesCanvas.width, zonesCanvas.height).data;
+        processPendingZoneReveals();
     };
     objectMask.onerror = () => {
         objectLookupFailed = true;
@@ -102,6 +185,7 @@ const loadLevel = (levelId: string) => {
         updateCoordinates();
     };
     objectMask.src = `assets/images/${levelId}-objects.png`;
+    zonesMask.src = `assets/images/${levelId}-zones.png`;
     colorImage.onload = () => {
         colorCanvas.width = colorImage.naturalWidth;
         colorCanvas.height = colorImage.naturalHeight;
@@ -109,10 +193,8 @@ const loadLevel = (levelId: string) => {
         if (!colorContext) return;
         colorContext.drawImage(colorImage, 0, 0);
         colorPixels = colorContext.getImageData(0, 0, colorCanvas.width, colorCanvas.height).data;
-        objectRevealCanvas.width = colorImage.naturalWidth;
-        objectRevealCanvas.height = colorImage.naturalHeight;
-        objectRevealContext = objectRevealCanvas.getContext("2d");
-        revealSelectedObject();
+        processPendingReveals();
+        processPendingZoneReveals();
     };
     colorImage.src = `assets/images/${levelId}-color.png`;
 
@@ -169,7 +251,11 @@ const loadLevel = (levelId: string) => {
         context.clearRect(0, 0, viewportWidth, viewportHeight);
         context.imageSmoothingEnabled = imageSmoothingEnabled;
         context.globalCompositeOperation = "source-over";
-        if (objectRevealCanvas.width && objectRevealCanvas.height) context.drawImage(objectRevealCanvas, panX, panY, imageWidth, imageHeight);
+        for (const object of revealedObjects) {
+            context.globalAlpha = object.opacity;
+            context.drawImage(object.canvas, panX + object.x * scale, panY + object.y * scale, object.canvas.width * scale, object.canvas.height * scale);
+        }
+        context.globalAlpha = 1;
         if (showBw) {
             context.globalCompositeOperation = "multiply";
             context.drawImage(image, panX, panY, imageWidth, imageHeight);
@@ -183,12 +269,17 @@ const loadLevel = (levelId: string) => {
             if (!response.ok) throw new Error(`Failed to load object data: ${response.status}`);
             return response.json();
         })
-        .then((level: { objects: { name: string; color: string }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown }) => {
+        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown }) => {
             objectNames = new Map(level.objects.map(object => [object.color.toUpperCase(), object.name]));
+            let itemId = 0;
+            objectItems = level.objects.flatMap(object => object.items.map(item => ({ id: itemId++, zone: item.zone, color: object.color, bbox: item.bbox })));
+            zoneDefinitions = level.zones;
             ({ imageSmoothingEnabled, maxZoom } = levelSettings(level));
             zoom = clampZoom(zoom, maxZoom);
             objectNamesReady = true;
             updateCoordinates();
+            processPendingSelections();
+            processPendingZoneReveals();
             draw();
         })
         .catch(error => {
@@ -196,6 +287,7 @@ const loadLevel = (levelId: string) => {
             objectLookupFailed = true;
             objectNamesReady = true;
             updateCoordinates();
+            processPendingSelections();
         });
 
     const zoomAt = (nextZoom: number, x: number, y: number) => {
@@ -270,7 +362,8 @@ const loadLevel = (levelId: string) => {
             if (point) {
                 selectedPoint = point;
                 updateCoordinates();
-                revealSelectedObject();
+                markSelectedObject(point);
+                revealSelectedObject(point);
             }
         }
         if (clickStart?.id === event.pointerId) clickStart = null;
