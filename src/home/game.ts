@@ -5,7 +5,7 @@ import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
 import { clampPan, clampZoom, imagePoint } from "./pan.js"
 import { extractMaskedRegion, fadeProgress, isZoneComplete, objectColorMatches, objectComponent, objectNameFromPixel } from "./objects.js"
-import { isLevelId, levelSettings } from "./level.js"
+import { decrementItemCount, hudIconPositions, isLevelId, levelSettings, takeRemainingKind } from "./level.js"
 
 export const NS = "App_game";
 
@@ -25,6 +25,13 @@ const fetchState = () => {
 
 let activeLevel: string | null = null;
 let activeLoad: AbortController | null = null;
+let levelHud: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] } | null = null;
+let levelIcons: { filename: string; width: number; height: number } | null = null;
+let remainingItemCounts: number[] = [];
+let hudSlotKinds: (number | null)[] = [];
+let hudSlotVisible: boolean[] = [];
+let pendingHudKinds: number[] = [];
+const HUD_FADE_DURATION = 300;
 let showBw = true;
 let redraw = () => {};
 
@@ -33,6 +40,12 @@ const loadLevel = (levelId: string) => {
     const context = canvas?.getContext("2d");
     if (!canvas || !context || activeLevel === levelId) return;
     activeLoad?.abort();
+    levelHud = null;
+    levelIcons = null;
+    remainingItemCounts = [];
+    hudSlotKinds = [];
+    hudSlotVisible = [];
+    pendingHudKinds = [];
     activeLoad = new AbortController();
     const { signal } = activeLoad;
     activeLevel = levelId;
@@ -50,13 +63,13 @@ const loadLevel = (levelId: string) => {
     let colorPixels: Uint8ClampedArray | null = null;
     let draw = () => {};
     let revealAnimation = 0;
-    const revealedObjects: { id: string; canvas: HTMLCanvasElement; x: number; y: number; opacity: number; startedAt: number }[] = [];
+    const revealedObjects: { id: string; canvas: HTMLCanvasElement; x: number; y: number; opacity: number; startedAt: number; duration: number }[] = [];
     const animateRevealedObjects = (now: number) => {
         revealAnimation = 0;
         if (signal.aborted) return;
         let fading = false;
         for (const object of revealedObjects) {
-            object.opacity = fadeProgress(now, object.startedAt, 150);
+            object.opacity = fadeProgress(now, object.startedAt, object.duration);
             if (object.opacity < 1) fading = true;
         }
         draw();
@@ -66,7 +79,7 @@ const loadLevel = (levelId: string) => {
     let objectMaskReady = false;
     let objectNamesReady = false;
     let objectLookupFailed = false;
-    let objectItems: { id: number; zone: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
+    let objectItems: { id: number; kind: number; zone: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
     let zoneDefinitions: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
     const selectedObjectIds = new Set<number>();
     const completedZones = new Set<string>();
@@ -84,7 +97,7 @@ const loadLevel = (levelId: string) => {
         const rgba = pixel ? Array.from(pixel).join(", ") : objectLookupFailed ? "unavailable" : "Loading…";
         coordinates.textContent = `X: ${selectedPoint.x}, Y: ${selectedPoint.y}\nObject: ${status}\nRGBA: ${rgba}`;
     };
-    const addRevealedImage = (id: string, pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number) => {
+    const addRevealedImage = (id: string, pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number, duration = 150) => {
         if (revealedObjects.some(object => object.id === id)) return;
         const layer = document.createElement("canvas");
         layer.width = width;
@@ -94,7 +107,7 @@ const loadLevel = (levelId: string) => {
         const imageData = new ImageData(width, height);
         imageData.data.set(pixels);
         layerContext.putImageData(imageData, 0, 0);
-        revealedObjects.push({ id, canvas: layer, x, y, opacity: 0, startedAt: performance.now() });
+        revealedObjects.push({ id, canvas: layer, x, y, opacity: 0, startedAt: performance.now(), duration });
         if (!revealAnimation) revealAnimation = requestAnimationFrame(animateRevealedObjects);
     };
     const revealZone = (name: string) => {
@@ -106,7 +119,7 @@ const loadLevel = (levelId: string) => {
         const zone = zoneDefinitions.find(zone => zone.name === name);
         if (!zone || zonesMask.naturalWidth !== colorImage.naturalWidth || zonesMask.naturalHeight !== colorImage.naturalHeight) return;
         const extracted = extractMaskedRegion(colorPixels, zonesMaskPixels, zonesMask.naturalWidth, zonesMask.naturalHeight, zone.color, zone.bbox);
-        if (extracted) addRevealedImage(`zone:${name}`, extracted.pixels, extracted.width, extracted.height, extracted.x, extracted.y);
+        if (extracted) addRevealedImage(`zone:${name}`, extracted.pixels, extracted.width, extracted.height, extracted.x, extracted.y, 750);
     };
     const processPendingZoneReveals = () => {
         if (!objectNamesReady || !zonesMaskPixels || !colorPixels) return;
@@ -116,9 +129,27 @@ const loadLevel = (levelId: string) => {
     const selectObjectAt = (point: { x: number; y: number }) => {
         const pixel = objectMaskContext?.getImageData(point.x, point.y, 1, 1).data;
         const item = pixel && objectItems.find(item => point.x >= item.bbox.x1 && point.x <= item.bbox.x2 && point.y >= item.bbox.y1 && point.y <= item.bbox.y2 && objectColorMatches(pixel, item.color));
-        if (!item || !item.zone || selectedObjectIds.has(item.id)) return;
+        if (!item || selectedObjectIds.has(item.id)) return;
         selectedObjectIds.add(item.id);
-        if (!completedZones.has(item.zone) && isZoneComplete(objectItems, selectedObjectIds, item.zone)) {
+        const slotIndex = hudSlotKinds.indexOf(item.kind);
+        const count = decrementItemCount(remainingItemCounts, item.kind);
+        if (slotIndex !== -1) {
+            if (count === 0) {
+                hudSlotVisible[slotIndex] = false;
+                App.render();
+                setTimeout(() => {
+                    if (signal.aborted) return;
+                    hudSlotKinds[slotIndex] = takeRemainingKind(pendingHudKinds, remainingItemCounts);
+                    App.render();
+                    if (hudSlotKinds[slotIndex] !== null) requestAnimationFrame(() => {
+                        if (signal.aborted) return;
+                        hudSlotVisible[slotIndex] = true;
+                        App.render();
+                    });
+                }, HUD_FADE_DURATION);
+            } else App.render();
+        }
+        if (item.zone && !completedZones.has(item.zone) && isZoneComplete(objectItems, selectedObjectIds, item.zone)) {
             completedZones.add(item.zone);
             revealZone(item.zone);
         }
@@ -269,10 +300,17 @@ const loadLevel = (levelId: string) => {
             if (!response.ok) throw new Error(`Failed to load object data: ${response.status}`);
             return response.json();
         })
-        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown }) => {
+        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown; hud?: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] }; icons?: { filename: string; width: number; height: number } }) => {
+            if (signal.aborted) return;
+            levelHud = level.hud ?? null;
+            levelIcons = level.icons ?? null;
+            remainingItemCounts = level.objects.map(object => object.items.length);
+            pendingHudKinds = level.objects.map((_, kind) => kind);
+            hudSlotKinds = (level.hud?.tlc_x ?? []).slice(0, 4).map(() => takeRemainingKind(pendingHudKinds, remainingItemCounts));
+            hudSlotVisible = hudSlotKinds.map(() => true);
             objectNames = new Map(level.objects.map(object => [object.color.toUpperCase(), object.name]));
             let itemId = 0;
-            objectItems = level.objects.flatMap(object => object.items.map(item => ({ id: itemId++, zone: item.zone, color: object.color, bbox: item.bbox })));
+            objectItems = level.objects.flatMap((object, kind) => object.items.map(item => ({ id: itemId++, kind, zone: item.zone, color: object.color, bbox: item.bbox })));
             zoneDefinitions = level.zones;
             ({ imageSmoothingEnabled, maxZoom } = levelSettings(level));
             zoom = clampZoom(zoom, maxZoom);
@@ -281,6 +319,7 @@ const loadLevel = (levelId: string) => {
             processPendingSelections();
             processPendingZoneReveals();
             draw();
+            App.render();
         })
         .catch(error => {
             console.error(error);
@@ -402,8 +441,16 @@ export const fetch = (params?: string[]) => {
 
 export const render = () => {
     if (!App.inContext(NS)) return "";
+    const hud = levelHud;
+    const icons = levelIcons;
+    const iconMarkup = hud && icons ? hudIconPositions(hud, icons.width, hudSlotKinds, remainingItemCounts).map((icon, index) => {
+        const background = icon.kind === null ? "none" : `url('assets/images/${icons.filename}')`;
+        const count = icon.kind === null ? "" : `<span class="level-hud-count">${icon.count}</span>`;
+        return `<div id="hud-slot-${index}" class="level-hud-icon" style="left:${icon.x}px;top:${icon.y}px;width:${icons.width}px;height:${icons.height}px;background-image:${background};background-position:-${icon.spriteX}px 0;opacity:${icon.kind !== null && hudSlotVisible[index] ? 1 : 0}">${count}</div>`;
+    }).join("") : "";
 
     return `
+    ${hud ? `<div class="level-hud" style="width:${hud.width}px;height:${hud.height}px"><img src="assets/images/${hud.filename}" alt="">${iconMarkup}</div>` : ""}
     <div class="image-hud">
         <div id="image-coordinates" class="image-coordinates">X: –, Y: –
 Object: –

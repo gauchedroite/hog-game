@@ -14,6 +14,7 @@ test("fades revealed objects from transparent to visible", () => {
   assert.equal(fadeProgress(100, 100, 150), 0);
   assert.equal(fadeProgress(175, 100, 150), 0.5);
   assert.equal(fadeProgress(250, 100, 150), 1);
+  assert.equal(fadeProgress(475, 100, 750), 0.5);
 });
 
 test("extracts source pixels matching the zone mask and preserves mask alpha", () => {

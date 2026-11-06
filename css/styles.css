@@ -36,6 +36,45 @@ body {
   pointer-events: auto;
 }
 
+.level-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 1rem;
+  overflow: hidden;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.level-hud img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+}
+
+.level-hud-icon {
+  position: absolute;
+  background-repeat: no-repeat;
+  transition: opacity 300ms ease;
+}
+
+.level-hud-count {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  place-items: center;
+  box-sizing: border-box;
+  border: 1px solid #161616;
+  border-radius: 10px;
+  background: #fff;
+  color: #161616;
+  font: 700 12px/1 sans-serif;
+}
+
 .image-hud {
   position: absolute;
   top: 1rem;

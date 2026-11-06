@@ -1,6 +1,18 @@
 {
   "imageSmoothingEnabled": true,
   "maxZoom": 60,
+  "hud": {
+	"filename": "hud.png",
+	"width": 395,
+	"height": 91,
+	"tlc_y": 21,
+	"tlc_x": [43, 128, 213, 301]
+  },
+  "icons": {
+	"filename": "icons.png",
+	"width": 60,
+	"height": 53
+  },
   "canvas": {
     "name": "level-01",
     "width": 1905,
@@ -9,6 +21,7 @@
   },
   "objects": [
     {
+	  "ix": 0,
       "name": "chat",
       "color": "#7460E0",
       "items": [
@@ -25,6 +38,7 @@
       ]
     },
     {
+	  "ix": 1,
       "name": "médaille",
       "color": "#E585D6",
       "items": [
@@ -36,6 +50,7 @@
       ]
     },
     {
+	  "ix": 2,
       "name": "oiseau",
       "color": "#85C7E5",
       "items": [
@@ -47,6 +62,7 @@
       ]
     },
     {
+	  "ix": 3,
       "name": "botte",
       "color": "#D2B6A3",
       "items": [
@@ -63,6 +79,7 @@
       ]
     },
     {
+	  "ix": 4,
       "name": "seau",
       "color": "#C5D2A3",
       "items": [

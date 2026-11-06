@@ -1,4 +1,4 @@
-# Create or update a level JSON file
+﻿# Create or update a level JSON file
 
 For each level, use its `.kra` file as the source. Save the JSON file beside it with the same base name. For example, save `cave-02.json` beside `cave-02.kra`. Do not use a fixed level name for other levels.
 
@@ -15,6 +15,7 @@ Keep the schema and property order below. If the matching JSON file already exis
 
 - Use the dominant solid fill color for each shape. Write the color as a six-digit hex value, such as `#7460E0`; ignore partially covered edge pixels when they only smooth the boundary.
 - Use a plain color name in `name`, such as `Purple` or `Cyan`.
+- Use the object position in the array for `ix`.
 - Group object shapes with the same fill color in one `objects` entry.
 - Add one `items` entry for each distinct intended object silhouette. Do not count antialias fringes or stray paint specks as separate objects.
 - Add one `zones` entry for each distinct intended zone region. Do not split a zone into entries for disconnected raster scraps or cutout artifacts; only count them separately if they are clearly separate designed regions. Store its position directly on the entry.
@@ -29,6 +30,8 @@ All values in this example are placeholders. Replace them with values from the m
 
 ```json
 {
+  "imageSmoothingEnabled": true,
+  "maxZoom": 60,
   "canvas": {
     "name": "level-name",
     "width": 0,
@@ -37,6 +40,7 @@ All values in this example are placeholders. Replace them with values from the m
   },
   "objects": [
     {
+      "ix": 0,
       "name": "Color name",
       "color": "#000000",
       "items": [
