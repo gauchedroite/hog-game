@@ -27,7 +27,6 @@ export const render = () => {
     return `
     <div>Le jeu!</div>
     <button onclick="${NS}.play()">Jouer</button>
-    <div>loading...</div>
 `;
 }
 
