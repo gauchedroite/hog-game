@@ -1,6 +1,18 @@
 {
   "imageSmoothingEnabled": true,
   "maxZoom": 60,
+  "audio": {
+	"background": "01-Lullaby_120bpm_Main_Full_Mix.wav",
+	"victory": "01-Lullaby_120bpm_Stinger-1_Victory_Full_Mix.wav",
+	"pick": "cozy_unlock_01.wav",
+	"pick_last": "cozy_level_up_01.wav"
+  },
+  "settings": {
+	"music_on": "icon_music.svg",
+	"music_off": "icon_music_disabled.svg",
+	"sound_on": "icon_sound.svg",
+	"sound_off": "icon_sound_disabled.svg"
+  },
   "congrat": {
 	"filename": "congrat.png",
 	"width": 468,

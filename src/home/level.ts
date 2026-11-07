@@ -7,6 +7,11 @@ export const levelSettings = (settings: { imageSmoothingEnabled?: unknown; maxZo
     maxZoom: typeof settings.maxZoom === "number" && Number.isFinite(settings.maxZoom) && settings.maxZoom >= 1 ? settings.maxZoom : 10,
 });
 
+export const visibleHudSlot = (kind: number, slotKinds: (number | null)[], slotVisible: boolean[]) => {
+    const slot = slotKinds.indexOf(kind);
+    return slot !== -1 && slotVisible[slot] ? slot : -1;
+};
+
 export const hudIconPositions = (hud: { tlc_x: number[]; tlc_y: number }, iconWidth: number, slotKinds: (number | null)[], itemCounts: number[]) =>
     hud.tlc_x.slice(0, 4).map((x, index) => {
         const kind = slotKinds[index] ?? null;
@@ -20,6 +25,8 @@ export const takeRemainingKind = (pendingKinds: number[], itemCounts: number[]) 
     if (!pendingKinds.length) return null;
     return pendingKinds.splice(Math.floor(Math.random() * pendingKinds.length), 1)[0]!;
 };
+
+export const pickSoundForCount = (remaining: number, pick: string | null, pickLast: string | null) => remaining === 0 ? pickLast ?? pick : pick;
 
 export const decrementItemCount = (itemCounts: number[], kind: number) => {
     itemCounts[kind] = Math.max(0, itemCounts[kind] - 1);

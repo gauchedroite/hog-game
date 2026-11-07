@@ -5,7 +5,7 @@ import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
 import { clampPan, clampZoom, imagePoint } from "./pan.js"
 import { extractMaskedRegion, fadeProgress, isZoneComplete, objectColorMatches, objectComponent } from "./objects.js"
-import { decrementItemCount, hudIconPositions, isLevelComplete, isLevelId, levelSettings, takeRemainingKind } from "./level.js"
+import { decrementItemCount, hudIconPositions, isLevelComplete, isLevelId, levelSettings, pickSoundForCount, takeRemainingKind, visibleHudSlot } from "./level.js"
 import { congratDelay, loadGameState, saveGameState } from "./progress.js"
 
 export const NS = "App_game";
@@ -26,6 +26,70 @@ const fetchState = () => {
 
 let activeLevel: string | null = null;
 let activeLoad: AbortController | null = null;
+let backgroundMusic: HTMLAudioElement | null = null;
+let victoryClip: HTMLAudioElement | null = null;
+let pickClip: HTMLAudioElement | null = null;
+let levelBackgroundAudio: string | null = null;
+let levelVictoryAudio: string | null = null;
+let levelPickAudio: string | null = null;
+let levelPickLastAudio: string | null = null;
+let levelSettingsIcons: { music_on: string; music_off: string; sound_on: string; sound_off: string } | null = null;
+let musicEnabled = true;
+let soundEnabled = true;
+
+const stopBackgroundMusic = () => {
+    backgroundMusic?.pause();
+    backgroundMusic = null;
+};
+
+const stopLevelAudio = () => {
+    stopBackgroundMusic();
+    victoryClip?.pause();
+    victoryClip = null;
+    pickClip?.pause();
+    pickClip = null;
+};
+
+const playBackgroundMusic = (filename: string, signal: AbortSignal) => {
+    stopBackgroundMusic();
+    const audio = backgroundMusic = new Audio(`assets/audio/${filename}`);
+    audio.loop = true;
+    const start = () => {
+        if (!musicEnabled || signal.aborted || backgroundMusic !== audio) return;
+        audio.play().catch(() => {
+            if (musicEnabled && !signal.aborted) window.addEventListener("pointerdown", start, { once: true, signal });
+        });
+    };
+    start();
+};
+
+const playPickSound = (filename: string, signal: AbortSignal) => {
+    pickClip?.pause();
+    const audio = pickClip = new Audio(`assets/audio/${filename}`);
+    const start = () => {
+        if (!soundEnabled || signal.aborted || pickClip !== audio) return;
+        audio.play().catch(() => {
+            if (soundEnabled && !signal.aborted) window.addEventListener("pointerdown", start, { once: true, signal });
+        });
+    };
+    start();
+};
+
+const playVictoryClip = (filename: string, signal: AbortSignal) => {
+    const audio = victoryClip = new Audio(`assets/audio/${filename}`);
+    const start = () => {
+        if (!musicEnabled || signal.aborted || victoryClip !== audio) return;
+        audio.play()
+            .then(() => {
+                if (!signal.aborted && victoryClip === audio) stopBackgroundMusic();
+            })
+            .catch(() => {
+                stopBackgroundMusic();
+                if (musicEnabled && !signal.aborted) window.addEventListener("pointerdown", start, { once: true, signal });
+            });
+    };
+    start();
+};
 let levelHud: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] } | null = null;
 let levelIcons: { filename: string; width: number; height: number } | null = null;
 let levelCongrat: { filename: string; width: number; height: number } | null = null;
@@ -42,12 +106,18 @@ const loadLevel = (levelId: string) => {
     const canvas = document.querySelector<HTMLCanvasElement>(".game-canvas");
     const context = canvas?.getContext("2d");
     if (!canvas || !context || activeLevel === levelId) return;
+    stopLevelAudio();
     if (congratTimer !== null) window.clearTimeout(congratTimer);
     congratTimer = null;
     activeLoad?.abort();
     levelHud = null;
     levelIcons = null;
     levelCongrat = null;
+    levelSettingsIcons = null;
+    levelBackgroundAudio = null;
+    levelVictoryAudio = null;
+    levelPickAudio = null;
+    levelPickLastAudio = null;
     congratVisible = false;
     congratShown = false;
     remainingItemCounts = [];
@@ -115,6 +185,8 @@ const loadLevel = (levelId: string) => {
             saveGameState(levelId, latest?.levelId === levelId ? latest.selections : selectedEntries(), { congratShown: true });
             congratShown = true;
             congratVisible = true;
+            if (levelVictoryAudio && musicEnabled) playVictoryClip(levelVictoryAudio, signal);
+            else stopBackgroundMusic();
             App.render();
         }, congratDelay(completedAt, now));
     };
@@ -147,15 +219,21 @@ const loadLevel = (levelId: string) => {
         for (const name of pendingZoneReveals) revealZone(name);
         pendingZoneReveals.length = 0;
     };
+    const itemAt = (point: { x: number; y: number }) => {
+        if (!objectMaskContext || point.x < 0 || point.y < 0 || point.x >= objectMask.naturalWidth || point.y >= objectMask.naturalHeight) return;
+        const pixel = objectMaskContext.getImageData(point.x, point.y, 1, 1).data;
+        return objectItems.find(item => point.x >= item.bbox.x1 && point.x <= item.bbox.x2 && point.y >= item.bbox.y1 && point.y <= item.bbox.y2 && objectColorMatches(pixel, item.color));
+    };
     const selectObjectAt = (point: { x: number; y: number }) => {
-        const pixel = objectMaskContext?.getImageData(point.x, point.y, 1, 1).data;
-        const item = pixel && objectItems.find(item => point.x >= item.bbox.x1 && point.x <= item.bbox.x2 && point.y >= item.bbox.y1 && point.y <= item.bbox.y2 && objectColorMatches(pixel, item.color));
-        if (!item || selectedObjectIds.has(item.id)) return;
+        const item = itemAt(point);
+        const slotIndex = item ? visibleHudSlot(item.kind, hudSlotKinds, hudSlotVisible) : -1;
+        if (!item || selectedObjectIds.has(item.id) || slotIndex === -1) return;
         selectedObjectIds.add(item.id);
         selectedPoints.set(item.id, point);
         saveGameState(levelId, [...selectedPoints].map(([id, selectedPoint]) => ({ id, ...selectedPoint })));
-        const slotIndex = hudSlotKinds.indexOf(item.kind);
         const count = decrementItemCount(remainingItemCounts, item.kind);
+        const pickAudio = pickSoundForCount(count, levelPickAudio, levelPickLastAudio);
+        if (pickAudio) playPickSound(pickAudio, signal);
         if (slotIndex !== -1) {
             if (count === 0) {
                 hudSlotVisible[slotIndex] = false;
@@ -191,7 +269,9 @@ const loadLevel = (levelId: string) => {
         else selectObjectAt(point);
     };
     const revealObjectAt = (point: { x: number; y: number }) => {
-        if (signal.aborted || !objectMaskPixels || !colorPixels) return;
+        if (signal.aborted || !objectMaskPixels || !colorPixels || !objectNamesReady) return;
+        const item = itemAt(point);
+        if (!item || !selectedObjectIds.has(item.id)) return;
         const width = objectMask.naturalWidth;
         const component = objectComponent(objectMaskPixels, width, objectMask.naturalHeight, point.x, point.y);
         if (!component || width !== colorImage.naturalWidth || objectMask.naturalHeight !== colorImage.naturalHeight || revealedObjects.some(object => object.id === `object:${component.id}`)) return;
@@ -209,7 +289,7 @@ const loadLevel = (levelId: string) => {
         addRevealedImage(`object:${component.id}`, extracted.data, cropWidth, cropHeight, component.x1, component.y1);
     };
     const processPendingReveals = () => {
-        if (!objectMaskPixels || !colorPixels) return;
+        if (!objectMaskPixels || !colorPixels || !objectNamesReady) return;
         for (const point of pendingRevealPoints) revealObjectAt(point);
         pendingRevealPoints.length = 0;
     };
@@ -317,11 +397,17 @@ const loadLevel = (levelId: string) => {
             if (!response.ok) throw new Error(`Failed to load object data: ${response.status}`);
             return response.json();
         })
-        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown; hud?: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] }; icons?: { filename: string; width: number; height: number }; congrat?: { filename: string; width: number; height: number } }) => {
+        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown; hud?: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] }; icons?: { filename: string; width: number; height: number }; congrat?: { filename: string; width: number; height: number }; audio?: { background?: string; victory?: string; pick?: string; pick_last?: string }; settings?: { music_on: string; music_off: string; sound_on: string; sound_off: string } }) => {
             if (signal.aborted) return;
             levelHud = level.hud ?? null;
             levelIcons = level.icons ?? null;
             levelCongrat = level.congrat ?? null;
+            levelSettingsIcons = level.settings ?? null;
+            levelBackgroundAudio = level.audio?.background ?? null;
+            levelVictoryAudio = level.audio?.victory ?? null;
+            levelPickAudio = level.audio?.pick ?? null;
+            levelPickLastAudio = level.audio?.pick_last ?? null;
+            if (levelBackgroundAudio && musicEnabled) playBackgroundMusic(levelBackgroundAudio, signal);
             remainingItemCounts = level.objects.map(object => object.items.length);
             let itemId = 0;
             objectItems = level.objects.flatMap((object, kind) => object.items.map(item => ({ id: itemId++, kind, zone: item.zone, color: object.color, bbox: item.bbox })));
@@ -459,6 +545,7 @@ const loadLevel = (levelId: string) => {
 }
 
 export const leave = () => {
+    stopLevelAudio();
     if (congratTimer !== null) window.clearTimeout(congratTimer);
     congratTimer = null;
     congratVisible = false;
@@ -495,8 +582,14 @@ export const render = () => {
     const congratMarkup = levelCongrat && congratVisible
         ? `<button class="congrat-hud" type="button" style="width:${levelCongrat.width}px;height:${levelCongrat.height}px" aria-label="Fermer les félicitations" onclick="${NS}.dismissCongrat()"><img src="assets/images/${levelCongrat.filename}" alt=""></button>`
         : "";
+    const settings = levelSettingsIcons;
+    const settingsMarkup = settings ? `<div class="hud-settings">
+        <button type="button" aria-label="${musicEnabled ? "Couper la musique" : "Activer la musique"}" onclick="${NS}.toggleMusic()"><img src="assets/images/${musicEnabled ? settings.music_on : settings.music_off}" alt=""></button>
+        <button type="button" aria-label="${soundEnabled ? "Couper les effets sonores" : "Activer les effets sonores"}" onclick="${NS}.toggleSound()"><img src="assets/images/${soundEnabled ? settings.sound_on : settings.sound_off}" alt=""></button>
+    </div>` : "";
 
     return `
+    ${settingsMarkup}
     <div class="menu-hud"><button onclick="${NS}.menu()">Retour au menu</button></div>
     ${congratMarkup}
     ${hud ? `<div class="level-hud" style="width:${hud.width}px;height:${hud.height}px"><img src="assets/images/${hud.filename}" alt="">${iconMarkup}</div>` : ""}
@@ -510,6 +603,29 @@ export const postRender = () => {
 
 
 export const menu = () => Router.goto("#/");
+
+export const toggleMusic = () => {
+    musicEnabled = !musicEnabled;
+    if (musicEnabled && activeLoad && levelBackgroundAudio && !isLevelComplete(remainingItemCounts))
+        playBackgroundMusic(levelBackgroundAudio, activeLoad.signal);
+    else {
+        stopBackgroundMusic();
+        if (!musicEnabled) {
+            victoryClip?.pause();
+            victoryClip = null;
+        }
+    }
+    App.render();
+};
+
+export const toggleSound = () => {
+    soundEnabled = !soundEnabled;
+    if (!soundEnabled) {
+        pickClip?.pause();
+        pickClip = null;
+    }
+    App.render();
+};
 
 export const dismissCongrat = () => {
     congratVisible = false;

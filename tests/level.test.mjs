@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decrementItemCount, hudIconPositions, isLevelComplete, isLevelId, levelSettings, takeRemainingKind } from "../dist/home/level.js";
+import { decrementItemCount, hudIconPositions, isLevelComplete, isLevelId, levelSettings, pickSoundForCount, takeRemainingKind, visibleHudSlot } from "../dist/home/level.js";
 
 test("accepts safe level IDs and rejects path segments", () => {
   assert.equal(isLevelId("level-01"), true);
@@ -19,6 +19,21 @@ test("uses level settings when valid and defaults for missing or invalid values"
   assert.deepEqual(levelSettings({}), { imageSmoothingEnabled: true, maxZoom: 10 });
   assert.deepEqual(levelSettings({ imageSmoothingEnabled: false, maxZoom: 5 }), { imageSmoothingEnabled: false, maxZoom: 5 });
   assert.deepEqual(levelSettings({ imageSmoothingEnabled: "false", maxZoom: 0 }), { imageSmoothingEnabled: true, maxZoom: 10 });
+});
+
+test("uses the last-item sound when a HUD kind is depleted", () => {
+  assert.equal(pickSoundForCount(1, "pick.wav", "last.wav"), "pick.wav");
+  assert.equal(pickSoundForCount(0, "pick.wav", "last.wav"), "last.wav");
+  assert.equal(pickSoundForCount(0, "pick.wav", null), "pick.wav");
+});
+
+test("only allows object kinds in visible HUD slots", () => {
+  const kinds = [2, 4, null, 1];
+  const visible = [true, true, false, false];
+  assert.equal(visibleHudSlot(2, kinds, visible), 0);
+  assert.equal(visibleHudSlot(4, kinds, visible), 1);
+  assert.equal(visibleHudSlot(1, kinds, visible), -1);
+  assert.equal(visibleHudSlot(3, kinds, visible), -1);
 });
 
 test("positions icon kinds and counts in HUD slots", () => {

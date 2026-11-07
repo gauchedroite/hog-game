@@ -53,7 +53,7 @@ export const clearGameState = () => {
     }
 };
 
-export const congratDelay = (completedAt: number, now: number) => Math.min(2000, Math.max(0, 2000 - (now - completedAt)));
+export const congratDelay = (completedAt: number, now: number) => Math.min(1000, Math.max(0, 1000 - (now - completedAt)));
 
 export const saveGameState = (levelId: string, selections: ISelection[], metadata: Pick<IGameState, "completedAt" | "congratShown"> = {}) => {
     const previous = loadGameState();

@@ -16,11 +16,11 @@ test("loads valid saved selections and ignores invalid entries", () => {
   });
 });
 
-test("waits two seconds after completion, or shows immediately when the wait elapsed", () => {
-  assert.equal(congratDelay(1000, 1000), 2000);
-  assert.equal(congratDelay(1000, 2500), 500);
-  assert.equal(congratDelay(1000, 3000), 0);
-  assert.equal(congratDelay(3000, 1000), 2000);
+test("waits one second after completion, or shows immediately when the wait elapsed", () => {
+  assert.equal(congratDelay(1000, 1000), 1000);
+  assert.equal(congratDelay(1000, 1500), 500);
+  assert.equal(congratDelay(1000, 2000), 0);
+  assert.equal(congratDelay(3000, 1000), 1000);
 });
 
 test("rejects missing, malformed, or empty game state", () => {
