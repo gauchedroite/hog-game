@@ -4,7 +4,7 @@ import * as App from "../core/app.js"
 import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
 import { clampPan, clampZoom, imagePoint } from "./pan.js"
-import { extractMaskedRegion, fadeProgress, isZoneComplete, objectColorMatches, objectComponent, objectNameFromPixel } from "./objects.js"
+import { extractMaskedRegion, fadeProgress, isZoneComplete, objectColorMatches, objectComponent } from "./objects.js"
 import { decrementItemCount, hudIconPositions, isLevelId, levelSettings, takeRemainingKind } from "./level.js"
 
 export const NS = "App_game";
@@ -32,8 +32,6 @@ let hudSlotKinds: (number | null)[] = [];
 let hudSlotVisible: boolean[] = [];
 let pendingHudKinds: number[] = [];
 const HUD_FADE_DURATION = 300;
-let showBw = true;
-let redraw = () => {};
 
 const loadLevel = (levelId: string) => {
     const canvas = document.querySelector<HTMLCanvasElement>(".game-canvas");
@@ -75,10 +73,7 @@ const loadLevel = (levelId: string) => {
         draw();
         if (fading) revealAnimation = requestAnimationFrame(animateRevealedObjects);
     };
-    let objectNames = new Map<string, string>();
-    let objectMaskReady = false;
     let objectNamesReady = false;
-    let objectLookupFailed = false;
     let objectItems: { id: number; kind: number; zone: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
     let zoneDefinitions: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
     const selectedObjectIds = new Set<number>();
@@ -86,17 +81,6 @@ const loadLevel = (levelId: string) => {
     const pendingSelectionPoints: { x: number; y: number }[] = [];
     const pendingRevealPoints: { x: number; y: number }[] = [];
     const pendingZoneReveals: string[] = [];
-    let selectedPoint: { x: number; y: number } | null = null;
-    const updateCoordinates = () => {
-        if (signal.aborted || !selectedPoint) return;
-        const coordinates = document.getElementById("image-coordinates");
-        if (!coordinates) return;
-        const pixel = objectMaskContext?.getImageData(selectedPoint.x, selectedPoint.y, 1, 1).data;
-        const name = pixel && objectNameFromPixel(pixel, objectNames);
-        const status = objectLookupFailed ? "unavailable" : !objectMaskReady || !objectNamesReady ? "Loading…" : name ?? "—";
-        const rgba = pixel ? Array.from(pixel).join(", ") : objectLookupFailed ? "unavailable" : "Loading…";
-        coordinates.textContent = `X: ${selectedPoint.x}, Y: ${selectedPoint.y}\nObject: ${status}\nRGBA: ${rgba}`;
-    };
     const addRevealedImage = (id: string, pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number, duration = 150) => {
         if (revealedObjects.some(object => object.id === id)) return;
         const layer = document.createElement("canvas");
@@ -196,8 +180,6 @@ const loadLevel = (levelId: string) => {
         objectMaskContext = objectCanvas.getContext("2d");
         objectMaskContext?.drawImage(objectMask, 0, 0);
         objectMaskPixels = objectMaskContext?.getImageData(0, 0, objectCanvas.width, objectCanvas.height).data ?? null;
-        objectMaskReady = true;
-        updateCoordinates();
         processPendingSelections();
         processPendingReveals();
     };
@@ -209,11 +191,6 @@ const loadLevel = (levelId: string) => {
         zonesContext.drawImage(zonesMask, 0, 0);
         zonesMaskPixels = zonesContext.getImageData(0, 0, zonesCanvas.width, zonesCanvas.height).data;
         processPendingZoneReveals();
-    };
-    objectMask.onerror = () => {
-        objectLookupFailed = true;
-        objectMaskReady = true;
-        updateCoordinates();
     };
     objectMask.src = `assets/images/${levelId}-objects.png`;
     zonesMask.src = `assets/images/${levelId}-zones.png`;
@@ -287,13 +264,10 @@ const loadLevel = (levelId: string) => {
             context.drawImage(object.canvas, panX + object.x * scale, panY + object.y * scale, object.canvas.width * scale, object.canvas.height * scale);
         }
         context.globalAlpha = 1;
-        if (showBw) {
-            context.globalCompositeOperation = "multiply";
-            context.drawImage(image, panX, panY, imageWidth, imageHeight);
-            context.globalCompositeOperation = "source-over";
-        }
+        context.globalCompositeOperation = "multiply";
+        context.drawImage(image, panX, panY, imageWidth, imageHeight);
+        context.globalCompositeOperation = "source-over";
     };
-    redraw = draw;
 
     window.fetch(`assets/data/${levelId}.json`)
         .then(response => {
@@ -308,14 +282,12 @@ const loadLevel = (levelId: string) => {
             pendingHudKinds = level.objects.map((_, kind) => kind);
             hudSlotKinds = (level.hud?.tlc_x ?? []).slice(0, 4).map(() => takeRemainingKind(pendingHudKinds, remainingItemCounts));
             hudSlotVisible = hudSlotKinds.map(() => true);
-            objectNames = new Map(level.objects.map(object => [object.color.toUpperCase(), object.name]));
             let itemId = 0;
             objectItems = level.objects.flatMap((object, kind) => object.items.map(item => ({ id: itemId++, kind, zone: item.zone, color: object.color, bbox: item.bbox })));
             zoneDefinitions = level.zones;
             ({ imageSmoothingEnabled, maxZoom } = levelSettings(level));
             zoom = clampZoom(zoom, maxZoom);
             objectNamesReady = true;
-            updateCoordinates();
             processPendingSelections();
             processPendingZoneReveals();
             draw();
@@ -323,9 +295,7 @@ const loadLevel = (levelId: string) => {
         })
         .catch(error => {
             console.error(error);
-            objectLookupFailed = true;
             objectNamesReady = true;
-            updateCoordinates();
             processPendingSelections();
         });
 
@@ -399,8 +369,6 @@ const loadLevel = (levelId: string) => {
             const scale = imageWidth / image.naturalWidth;
             const point = imagePoint(event.clientX - bounds.left, event.clientY - bounds.top, panX, panY, scale, image.naturalWidth, image.naturalHeight);
             if (point) {
-                selectedPoint = point;
-                updateCoordinates();
                 markSelectedObject(point);
                 revealSelectedObject(point);
             }
@@ -425,6 +393,15 @@ const loadLevel = (levelId: string) => {
     image.onload = draw;
     image.src = `assets/images/${levelId}-bw.png`;
 }
+
+export const leave = () => {
+    activeLoad?.abort();
+    activeLoad = null;
+    activeLevel = null;
+    const canvas = document.querySelector<HTMLCanvasElement>(".game-canvas");
+    const context = canvas?.getContext("2d");
+    if (canvas && context) context.clearRect(0, 0, canvas.width, canvas.height);
+};
 
 export const fetch = (params?: string[]) => {
     const levelId = params?.[0];
@@ -451,12 +428,6 @@ export const render = () => {
 
     return `
     ${hud ? `<div class="level-hud" style="width:${hud.width}px;height:${hud.height}px"><img src="assets/images/${hud.filename}" alt="">${iconMarkup}</div>` : ""}
-    <div class="image-hud">
-        <div id="image-coordinates" class="image-coordinates">X: –, Y: –
-Object: –
-RGBA: –</div>
-        <label><input type="checkbox" ${showBw ? "checked" : ""} onchange="${NS}.toggleBw(this.checked)"> Show B&amp;W</label>
-    </div>
 `;
 }
 
@@ -465,11 +436,6 @@ export const postRender = () => {
 }
 
 
-
-export const toggleBw = (show: boolean) => {
-    showBw = show;
-    redraw();
-}
 
 export const play = () => {
     if (activeLevel) Router.goto(`#/game/${activeLevel}`)

@@ -74,25 +74,3 @@ body {
   color: #161616;
   font: 700 12px/1 sans-serif;
 }
-
-.image-hud {
-  position: absolute;
-  top: 1rem;
-  left: 1rem;
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: rgb(255 255 255 / 85%);
-  font: 1rem sans-serif;
-  pointer-events: auto;
-}
-
-.image-coordinates {
-  white-space: pre-line;
-}
-
-.image-hud label {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}

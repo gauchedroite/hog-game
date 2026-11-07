@@ -11,7 +11,10 @@ import * as game from "./game.js"
 
 
 export const startup = () => {
-    router.addRoute("^#/?$", home.fetch);
+    router.addRoute("^#/?$", () => {
+        game.leave();
+        home.fetch();
+    });
     router.addRoute("^#/game/([^/]+)$", game.fetch);
 }
 
