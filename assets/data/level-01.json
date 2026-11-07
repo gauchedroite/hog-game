@@ -1,6 +1,11 @@
 {
   "imageSmoothingEnabled": true,
   "maxZoom": 60,
+  "congrat": {
+	"filename": "congrat.png",
+	"width": 468,
+	"height": 160
+  },
   "hud": {
 	"filename": "hud.png",
 	"width": 395,

@@ -5,7 +5,8 @@ import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
 import { clampPan, clampZoom, imagePoint } from "./pan.js"
 import { extractMaskedRegion, fadeProgress, isZoneComplete, objectColorMatches, objectComponent } from "./objects.js"
-import { decrementItemCount, hudIconPositions, isLevelId, levelSettings, takeRemainingKind } from "./level.js"
+import { decrementItemCount, hudIconPositions, isLevelComplete, isLevelId, levelSettings, takeRemainingKind } from "./level.js"
+import { congratDelay, loadGameState, saveGameState } from "./progress.js"
 
 export const NS = "App_game";
 
@@ -27,6 +28,10 @@ let activeLevel: string | null = null;
 let activeLoad: AbortController | null = null;
 let levelHud: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] } | null = null;
 let levelIcons: { filename: string; width: number; height: number } | null = null;
+let levelCongrat: { filename: string; width: number; height: number } | null = null;
+let congratVisible = false;
+let congratShown = false;
+let congratTimer: number | null = null;
 let remainingItemCounts: number[] = [];
 let hudSlotKinds: (number | null)[] = [];
 let hudSlotVisible: boolean[] = [];
@@ -37,9 +42,14 @@ const loadLevel = (levelId: string) => {
     const canvas = document.querySelector<HTMLCanvasElement>(".game-canvas");
     const context = canvas?.getContext("2d");
     if (!canvas || !context || activeLevel === levelId) return;
+    if (congratTimer !== null) window.clearTimeout(congratTimer);
+    congratTimer = null;
     activeLoad?.abort();
     levelHud = null;
     levelIcons = null;
+    levelCongrat = null;
+    congratVisible = false;
+    congratShown = false;
     remainingItemCounts = [];
     hudSlotKinds = [];
     hudSlotVisible = [];
@@ -77,10 +87,37 @@ const loadLevel = (levelId: string) => {
     let objectItems: { id: number; kind: number; zone: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
     let zoneDefinitions: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] = [];
     const selectedObjectIds = new Set<number>();
+    const selectedPoints = new Map<number, { x: number; y: number }>();
     const completedZones = new Set<string>();
     const pendingSelectionPoints: { x: number; y: number }[] = [];
     const pendingRevealPoints: { x: number; y: number }[] = [];
     const pendingZoneReveals: string[] = [];
+    const selectedEntries = () => [...selectedPoints].map(([id, point]) => ({ id, ...point }));
+    const checkCompletion = () => {
+        if (!levelCongrat || !isLevelComplete(remainingItemCounts) || congratShown || congratTimer !== null) return;
+        const saved = loadGameState();
+        if (saved?.levelId === levelId && saved.congratShown) {
+            congratShown = true;
+            return;
+        }
+        const now = Date.now();
+        const previousCompletion = saved?.levelId === levelId ? saved.completedAt : undefined;
+        const completedAt = previousCompletion !== undefined && previousCompletion <= now ? previousCompletion : now;
+        if (previousCompletion !== completedAt) saveGameState(levelId, selectedEntries(), { completedAt });
+        congratTimer = window.setTimeout(() => {
+            congratTimer = null;
+            if (signal.aborted || activeLevel !== levelId) return;
+            const latest = loadGameState();
+            if (latest?.levelId === levelId && latest.congratShown) {
+                congratShown = true;
+                return;
+            }
+            saveGameState(levelId, latest?.levelId === levelId ? latest.selections : selectedEntries(), { congratShown: true });
+            congratShown = true;
+            congratVisible = true;
+            App.render();
+        }, congratDelay(completedAt, now));
+    };
     const addRevealedImage = (id: string, pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number, duration = 150) => {
         if (revealedObjects.some(object => object.id === id)) return;
         const layer = document.createElement("canvas");
@@ -115,6 +152,8 @@ const loadLevel = (levelId: string) => {
         const item = pixel && objectItems.find(item => point.x >= item.bbox.x1 && point.x <= item.bbox.x2 && point.y >= item.bbox.y1 && point.y <= item.bbox.y2 && objectColorMatches(pixel, item.color));
         if (!item || selectedObjectIds.has(item.id)) return;
         selectedObjectIds.add(item.id);
+        selectedPoints.set(item.id, point);
+        saveGameState(levelId, [...selectedPoints].map(([id, selectedPoint]) => ({ id, ...selectedPoint })));
         const slotIndex = hudSlotKinds.indexOf(item.kind);
         const count = decrementItemCount(remainingItemCounts, item.kind);
         if (slotIndex !== -1) {
@@ -136,6 +175,10 @@ const loadLevel = (levelId: string) => {
         if (item.zone && !completedZones.has(item.zone) && isZoneComplete(objectItems, selectedObjectIds, item.zone)) {
             completedZones.add(item.zone);
             revealZone(item.zone);
+        }
+        if (isLevelComplete(remainingItemCounts)) {
+            checkCompletion();
+            App.render();
         }
     };
     const processPendingSelections = () => {
@@ -274,21 +317,42 @@ const loadLevel = (levelId: string) => {
             if (!response.ok) throw new Error(`Failed to load object data: ${response.status}`);
             return response.json();
         })
-        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown; hud?: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] }; icons?: { filename: string; width: number; height: number } }) => {
+        .then((level: { objects: { name: string; color: string; items: { zone: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[] }[]; zones: { name: string; color: string; bbox: { x1: number; y1: number; x2: number; y2: number } }[]; imageSmoothingEnabled?: unknown; maxZoom?: unknown; hud?: { filename: string; width: number; height: number; tlc_y: number; tlc_x: number[] }; icons?: { filename: string; width: number; height: number }; congrat?: { filename: string; width: number; height: number } }) => {
             if (signal.aborted) return;
             levelHud = level.hud ?? null;
             levelIcons = level.icons ?? null;
+            levelCongrat = level.congrat ?? null;
             remainingItemCounts = level.objects.map(object => object.items.length);
-            pendingHudKinds = level.objects.map((_, kind) => kind);
-            hudSlotKinds = (level.hud?.tlc_x ?? []).slice(0, 4).map(() => takeRemainingKind(pendingHudKinds, remainingItemCounts));
-            hudSlotVisible = hudSlotKinds.map(() => true);
             let itemId = 0;
             objectItems = level.objects.flatMap((object, kind) => object.items.map(item => ({ id: itemId++, kind, zone: item.zone, color: object.color, bbox: item.bbox })));
             zoneDefinitions = level.zones;
+            const saved = loadGameState();
+            if (saved?.levelId === levelId) {
+                congratShown = saved.congratShown === true;
+                for (const selection of saved.selections) {
+                    const item = objectItems.find(item => item.id === selection.id);
+                    if (!item || selectedObjectIds.has(item.id)) continue;
+                    selectedObjectIds.add(item.id);
+                    selectedPoints.set(item.id, { x: selection.x, y: selection.y });
+                    decrementItemCount(remainingItemCounts, item.kind);
+                    pendingRevealPoints.push({ x: selection.x, y: selection.y });
+                }
+                for (const zone of zoneDefinitions) {
+                    if (isZoneComplete(objectItems, selectedObjectIds, zone.name)) {
+                        completedZones.add(zone.name);
+                        pendingZoneReveals.push(zone.name);
+                    }
+                }
+            }
+            pendingHudKinds = level.objects.map((_, kind) => kind);
+            hudSlotKinds = (level.hud?.tlc_x ?? []).slice(0, 4).map(() => takeRemainingKind(pendingHudKinds, remainingItemCounts));
+            hudSlotVisible = hudSlotKinds.map(() => true);
             ({ imageSmoothingEnabled, maxZoom } = levelSettings(level));
             zoom = clampZoom(zoom, maxZoom);
             objectNamesReady = true;
             processPendingSelections();
+            checkCompletion();
+            processPendingReveals();
             processPendingZoneReveals();
             draw();
             App.render();
@@ -395,6 +459,9 @@ const loadLevel = (levelId: string) => {
 }
 
 export const leave = () => {
+    if (congratTimer !== null) window.clearTimeout(congratTimer);
+    congratTimer = null;
+    congratVisible = false;
     activeLoad?.abort();
     activeLoad = null;
     activeLevel = null;
@@ -425,8 +492,13 @@ export const render = () => {
         const count = icon.kind === null ? "" : `<span class="level-hud-count">${icon.count}</span>`;
         return `<div id="hud-slot-${index}" class="level-hud-icon" style="left:${icon.x}px;top:${icon.y}px;width:${icons.width}px;height:${icons.height}px;background-image:${background};background-position:-${icon.spriteX}px 0;opacity:${icon.kind !== null && hudSlotVisible[index] ? 1 : 0}">${count}</div>`;
     }).join("") : "";
+    const congratMarkup = levelCongrat && congratVisible
+        ? `<button class="congrat-hud" type="button" style="width:${levelCongrat.width}px;height:${levelCongrat.height}px" aria-label="Fermer les félicitations" onclick="${NS}.dismissCongrat()"><img src="assets/images/${levelCongrat.filename}" alt=""></button>`
+        : "";
 
     return `
+    <div class="menu-hud"><button onclick="${NS}.menu()">Retour au menu</button></div>
+    ${congratMarkup}
     ${hud ? `<div class="level-hud" style="width:${hud.width}px;height:${hud.height}px"><img src="assets/images/${hud.filename}" alt="">${iconMarkup}</div>` : ""}
 `;
 }
@@ -436,6 +508,13 @@ export const postRender = () => {
 }
 
 
+
+export const menu = () => Router.goto("#/");
+
+export const dismissCongrat = () => {
+    congratVisible = false;
+    App.render();
+};
 
 export const play = () => {
     if (activeLevel) Router.goto(`#/game/${activeLevel}`)

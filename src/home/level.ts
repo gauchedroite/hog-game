@@ -1,5 +1,7 @@
 export const isLevelId = (levelId: string) => /^level-[a-z0-9-]+$/.test(levelId);
 
+export const isLevelComplete = (itemCounts: number[]) => itemCounts.length > 0 && itemCounts.every(count => count === 0);
+
 export const levelSettings = (settings: { imageSmoothingEnabled?: unknown; maxZoom?: unknown }) => ({
     imageSmoothingEnabled: typeof settings.imageSmoothingEnabled === "boolean" ? settings.imageSmoothingEnabled : true,
     maxZoom: typeof settings.maxZoom === "number" && Number.isFinite(settings.maxZoom) && settings.maxZoom >= 1 ? settings.maxZoom : 10,

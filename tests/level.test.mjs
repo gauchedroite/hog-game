@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decrementItemCount, hudIconPositions, isLevelId, levelSettings, takeRemainingKind } from "../dist/home/level.js";
+import { decrementItemCount, hudIconPositions, isLevelComplete, isLevelId, levelSettings, takeRemainingKind } from "../dist/home/level.js";
 
 test("accepts safe level IDs and rejects path segments", () => {
   assert.equal(isLevelId("level-01"), true);
   assert.equal(isLevelId("level-02-bonus"), true);
   assert.equal(isLevelId("../level-01"), false);
   assert.equal(isLevelId("level-01/extra"), false);
+});
+
+test("detects when all level items have been found", () => {
+  assert.equal(isLevelComplete([]), false);
+  assert.equal(isLevelComplete([1, 0]), false);
+  assert.equal(isLevelComplete([0, 0]), true);
 });
 
 test("uses level settings when valid and defaults for missing or invalid values", () => {

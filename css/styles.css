@@ -36,6 +36,31 @@ body {
   pointer-events: auto;
 }
 
+.menu-hud {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+}
+
+.congrat-hud {
+  position: absolute;
+  top: 33%;
+  left: 50%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+
+.congrat-hud img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+}
+
 .level-hud {
   position: absolute;
   left: 50%;

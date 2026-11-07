@@ -3,6 +3,7 @@
 import * as App from "../core/app.js"
 import * as Router from "../core/router.js"
 import * as Misc from "../core/misc.js"
+import { clearGameState, loadGameState } from "./progress.js"
 
 export const NS = "App_home";
 
@@ -24,9 +25,11 @@ export const fetch = () => {
 export const render = () => {
     if (!App.inContext(NS)) return "";
 
+    const hasGameState = loadGameState() !== null;
     return `
     <div>Le jeu!</div>
-    <button onclick="${NS}.play()">Jouer</button>
+    <button onclick="${NS}.play()">${hasGameState ? "Continuer" : "Jouer"}</button>
+    ${hasGameState ? `<button onclick="${NS}.restart()">Nouvelle partie</button>` : ""}
 `;
 }
 
@@ -37,5 +40,10 @@ export const postRender = () => {
 
 
 export const play = () => {
-    Router.goto(`#/game/level-01`)
+    Router.goto(`#/game/${loadGameState()?.levelId ?? "level-01"}`)
+}
+
+export const restart = () => {
+    clearGameState();
+    Router.goto("#/game/level-01");
 }
