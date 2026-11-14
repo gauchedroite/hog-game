@@ -590,7 +590,7 @@ export const render = () => {
 
     return `
     ${settingsMarkup}
-    <div class="menu-hud"><button onclick="${NS}.menu()">Retour au menu</button></div>
+    <div class="menu-hud"><button type="button" aria-label="Retour au menu" onclick="${NS}.menu()"><img src="assets/images/home.png" alt=""></button></div>
     ${congratMarkup}
     ${hud ? `<div class="level-hud" style="width:${hud.width}px;height:${hud.height}px"><img src="assets/images/${hud.filename}" alt="">${iconMarkup}</div>` : ""}
 `;

@@ -44,7 +44,8 @@ body {
   gap: 0.5rem;
 }
 
-.hud-settings button {
+.hud-settings button,
+.menu-hud button {
   width: 48px;
   height: 48px;
   padding: 0;
@@ -53,7 +54,8 @@ body {
   cursor: pointer;
 }
 
-.hud-settings img {
+.hud-settings img,
+.menu-hud img {
   display: block;
   width: 100%;
   height: 100%;
@@ -61,7 +63,7 @@ body {
 
 .menu-hud {
   position: absolute;
-  top: 4.5rem;
+  top: 1rem;
   left: 1rem;
 }
 
