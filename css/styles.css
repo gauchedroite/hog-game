@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Barriecito";
+  src: url("../assets/fonts/Barriecito-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
 html,
 body {
   width: 100%;
@@ -7,6 +15,39 @@ body {
 
 body {
   overflow: hidden;
+}
+
+.home-title {
+  margin-right: 0;
+  color: sienna;
+  font-family: "Barriecito", cursive;
+  font-size: 8rem;
+  text-align: right;
+}
+
+body#app-home #app-root button {
+  display: block;
+  margin: 0 0 0 auto;
+  background-color: burlywood;
+  color: ivory;
+  font-family: "Barriecito", cursive;
+  font-size: 3.5rem;
+}
+
+body#app-home #app-root button + button {
+  margin-top: 1rem;
+}
+
+body#app-home .game-container {
+  background-color: antiquewhite;
+}
+
+.home-panel {
+  width: 900px;
+  max-width: 100%;
+  min-height: 90vh;
+  margin: 0 auto;
+  background: antiquewhite url("../assets/images/index.png") left center / auto 100% no-repeat;
 }
 
 .game-container {
